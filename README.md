@@ -6,4 +6,4 @@ CircuitPython driver for the Semtech SX1280 LoRa chip (2.4 GHz)
 ### Status: 
 - [x] init and configure 
 - [ ] exchange packet(s)
-    need actual 2.4 GHz antenna for lambda breakouts? 
+  - need actual 2.4 GHz antenna for lambda breakouts? 

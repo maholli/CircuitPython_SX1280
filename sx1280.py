@@ -75,13 +75,14 @@ class SX1280:
                  6:'Tx Done'}
     
     _BUFFER = bytearray(10)
-    def __init__(self, spi, cs, reset, busy, *, preamble_length=8, baudrate=500000):
+    def __init__(self, spi, cs, reset, busy, *, preamble_length=8, baudrate=1500000, debug=False):
         self._device = spidev.SPIDevice(spi, cs, baudrate=baudrate, polarity=0, phase=0)
         self._reset = reset
         self._reset.switch_to_input(pull=digitalio.Pull.UP)
         self._busy = busy
         self._busy.switch_to_input()
         self.packet_type = _PACKET_TYPE_GFSK # default
+        self._debug = debug
 
         self.reset()
         self.clear_Irq_Status()
@@ -90,11 +91,22 @@ class SX1280:
     def _send_command(self,command):
         _size=len(command)
         with self._device as device:
-            device.write(command, end=_size)
-            device.readinto(self._BUFFER, end=_size)
+            # device.write(command, end=_size)
+            # device.readinto(self._BUFFER, end=_size)
+            device.write_readinto(command,self._BUFFER,out_end=_size,in_end=_size)
+        if self._debug:
+            try:
+                print('\tStatus:',hex(int(bin(self._BUFFER[0])[:4])),hex(int(bin(self._BUFFER[0])[4:7])))
+                # [print(hex(i),' ',end='') for i in self._BUFFER[1:_size]]
+                # print('')
+            except Exception as e:
+                print(e)
+
         return self._BUFFER[:_size]
 
     def _writeRegister(self,address1,address2,data):
+        if self._debug:
+            print('Writing to _writeRegister:',address1,address2)
         self._send_command(bytes([_RADIO_WRITE_REGISTER,address1,address2,data]))
 
     def _busywait(self):
@@ -111,20 +123,28 @@ class SX1280:
         time.sleep(0.03)   # 5 ms
 
     def set_Standby(self,state='STDBY_RC'):
+        if self._debug:
+            print('Setting Standby')
         if state == 'STDBY_RC':
             self._send_command(bytes([_RADIO_SET_STANDBY, 0x00]))
         elif state == 'STDBY_XOSC':
             self._send_command(bytes([_RADIO_SET_STANDBY, 0x01]))
 
     def set_Packet_Type(self,packetType=_PACKET_TYPE_LORA):
+        if self._debug:
+            print('Setting Packet Type')
         self._send_command(bytes([_RADIO_SET_PACKETTYPE, packetType]))
         self.packet_type = packetType
 
     def set_RF_Freq(self,freq=[0xB8,0x9D,0x89]):
         # 0xB89D89 = 12098953 PLL steps (2.4 GHz)
+        if self._debug:
+            print('Setting RF Freq')
         self._send_command(bytes([_RADIO_SET_RFFREQUENCY]+freq))
 
     def set_Buffer_Base_Address(self,txBaseAddress=0x80,rxBaseAddress=0x00):
+        if self._debug:
+            print('Setting Buffer Base Address')
         self._txBaseAddress = txBaseAddress
         self._send_command(bytes([_RADIO_SET_BUFFERBASEADDRESS, txBaseAddress, rxBaseAddress]))
 
@@ -132,6 +152,8 @@ class SX1280:
         # LoRa: modParam1=SpreadingFactor, modParam2=Bandwidth, modParam3=CodingRate
         # LoRa with SF7, BW 1600, CR 4/5 
         # Must set PacketType first! - See Table 13-48,49,50
+        if self._debug:
+            print('Setting Modulation parameters')
         self._send_command(bytes([_RADIO_SET_MODULATIONPARAMS,modParam1,modParam2,modParam3]))
         if self.packet_type == _PACKET_TYPE_LORA:
             # If the Spreading Factor selected is SF5 or SF6
@@ -148,36 +170,54 @@ class SX1280:
 
     def set_Packet_Params(self,pktParam1=0x0C,pktParam2=0x00,pktParam3=0x80,pktParam4=0x20,pktParam5=0x40,pktParam6=0x00,pktParam7=0x00):
         # 16 preamble symbols (0x0C), explicit header (0x00), 128-byte payload (0x80), CRC enabled (0x20), standard IQ (0x40)
+        if self._debug:
+            print('Setting Packet Parameters')
         self._send_command(bytes([_RADIO_SET_PACKETPARAMS,pktParam1,pktParam2,pktParam3,pktParam4,pktParam5,pktParam6,pktParam6]))
 
     def set_Tx_Param(self,power=0x1F,rampTime=0xE0):
         # power=13 dBm (0x1F), rampTime=20us (0xE0). See Table 11-47
+        if self._debug:
+            print('Setting Tx Parameters')
         self._send_command(bytes([_RADIO_SET_TXPARAMS,power,rampTime]))
 
     def write_Buffer(self,data):
         #Offset will correspond to txBaseAddress in normal operation.
+        if self._debug:
+            print('Writing Buffer')
         _offset = self._txBaseAddress
         _len = len(data)
         assert 0 < _len <= 252
         with self._device as device:
-            device.write(bytes([_RADIO_WRITE_BUFFER,_offset]),end=2)
-            device.write(data,end=_len)
+            device.write(bytes([_RADIO_WRITE_BUFFER,_offset])+data,end=_len)
+            # device.write(data,end=_len)
 
     def set_Dio_IRQ_Params(self,irqMask=[0x40,0x23],dio1Mask=[0x00,0x01],dio2Mask=[0x00,0x02],dio3Mask=[0x40,0x20]):
         # TxDone IRQ on DIO1, RxDone IRQ on DIO2, HeaderError and RxTxTimeout IRQ on DIO3
+        if self._debug:
+            print('Setting DIO IRQ Parameters')
         self._send_command(bytes([_RADIO_SET_DIOIRQPARAMS]+irqMask+dio1Mask+dio2Mask+dio3Mask))
-    
+    def get_Irq_Status(self):
+        if self._debug:
+            print('Getting IRQ Status')
+        self._send_command(bytes([_RADIO_GET_IRQSTATUS,0x00,0x00,0x00]))
     def clear_Irq_Status(self):
+        if self._debug:
+            print('Clearing IRQ Status')
         self._send_command(bytes([_RADIO_CLR_IRQSTATUS, 0xFF, 0xFF]))
     
     def set_Tx(self,pBase=0x00,pBaseCount=[0x00,0x00]):
         #Activate transmit mode with no timeout. Tx mode will stop after first packet sent.
+        if self._debug:
+            print('Setting Tx')
         self._send_command(bytes([_RADIO_SET_TX, pBase]+pBaseCount))
+        self.status
 
     def set_Rx(self,pBase=0x03,pBaseCount=[0x00,0x00]):
         # pBaseCount = 16 bit parameter of how many steps to time-out
         # see Table 11-22 for pBase values
         # Time-out duration = pBase * periodBaseCount
+        if self._debug:
+            print('Setting Rx')
         self._send_command(bytes([_RADIO_SET_RX, pBase]+pBaseCount))
 
     def get_Packet_Status(self):
@@ -208,4 +248,7 @@ class SX1280:
         _status = bin(self._send_command(bytes([_RADIO_GET_STATUS]))[0])
         # print('{0:08b} Mode:{1}, Cmd Status:{2}'.format(int(_status),_status_mode[int(_status[:4])],_status_cmd[int(_status[4:6])]))
         # self._busywait()
-        return (_status,self._status_mode[int(_status[:4])],self._status_cmd[int(_status[4:6])])
+        try:
+            return (_status,self._status_mode[int(_status[:4])],self._status_cmd[int(_status[4:7])])
+        except KeyError:
+            pass

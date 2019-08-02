@@ -83,6 +83,8 @@ class SX1280:
         self._busy.switch_to_input()  
         self.packet_type = _PACKET_TYPE_GFSK # default
         self._debug = debug
+        self._set_ranging = False
+        self._ranging=False
 
         self.reset()
         self._busywait()
@@ -93,17 +95,7 @@ class SX1280:
     def _send_command(self,command):
         _size=len(command)
         with self._device as device:
-            # device.write(command, end=_size)
-            # device.readinto(self._BUFFER, end=_size)
             device.write_readinto(command,self._BUFFER,out_end=_size,in_end=_size)
-        # if self._debug:
-        #     try:
-        #         print('\tStatus:',hex(int(bin(self._BUFFER[0])[:4])),hex(int(bin(self._BUFFER[0])[4:7])))
-        #         # [print(hex(i),' ',end='') for i in self._BUFFER[1:_size]]
-        #         # print('')
-        #     except Exception as e:
-        #         print(e)
-
         return self._BUFFER[:_size]
 
     def _writeRegister(self,address1,address2,data):
@@ -111,12 +103,23 @@ class SX1280:
             print('Writing to _writeRegister:',hex(address1),hex(address2))
         self._send_command(bytes([_RADIO_WRITE_REGISTER,address1,address2,data]))
 
+    def _readRegister(self,address1,address2,_length=1):
+        if self._debug:
+            print('Reading:',hex(address1),hex(address2))
+        with self._device as device:
+            device.write(bytes([_RADIO_READ_REGISTER,address1,address2]), end=3)
+            device.readinto(self._BUFFER, end=_length+1)
+        if self._debug:           
+            [print(hex(i),' ',end='')for i in self._BUFFER]
+            print('')
+        return self._BUFFER[1]
+
     def _busywait(self):
-        print('waiting for busy pin.',end='')
+        if self._debug:
+            print('waiting for busy pin.',end='')
         while self._busy.value:
             print('.',end='')
             pass
-        print('done!')
 
     def set_Regulator_Mode(self,mode=0x01):
         if self._debug:
@@ -138,9 +141,13 @@ class SX1280:
             self._send_command(bytes([_RADIO_SET_STANDBY, 0x01]))
 
     def set_Packet_Type(self,packetType=_PACKET_TYPE_LORA):
+        self._packetType = packetType
+        if packetType == 'RANGING':
+            self._packetType = _PACKET_TYPE_RANGING
+
         if self._debug:
             print('Setting Packet Type')
-        self._send_command(bytes([_RADIO_SET_PACKETTYPE, packetType]))
+        self._send_command(bytes([_RADIO_SET_PACKETTYPE, self._packetType]))
         self.packet_type = packetType
 
     def set_Cad_Params(self,symbol=0x80):
@@ -232,23 +239,25 @@ class SX1280:
         if self._debug:
             print('Setting DIO IRQ Parameters')
         self._send_command(bytes([_RADIO_SET_DIOIRQPARAMS]+irqMask+dio1Mask+dio2Mask+dio3Mask))
-    def get_Irq_Status(self):
-        if self._debug:
-            print('Getting IRQ Status')
-        _stat = self._send_command(bytes([_RADIO_GET_IRQSTATUS,0x00,0x00,0x00]))
-        return _stat
+    
     def clear_Irq_Status(self):
         if self._debug:
             print('Clearing IRQ Status')
         self._send_command(bytes([_RADIO_CLR_IRQSTATUS, 0xFF, 0xFF]))
     
+    def get_Irq_Status(self):
+        if self._debug:
+            print('Getting IRQ Status')
+        _stat = self._send_command(bytes([_RADIO_GET_IRQSTATUS,0x00,0x00,0x00]))
+        self._send_command(bytes([_RADIO_CLR_IRQSTATUS, 0xFF, 0xFF])) # clear IRQ status
+        return _stat
+
     def set_Tx(self,pBase=0x00,pBaseCount=[0x00,0x00]):
         #Activate transmit mode with no timeout. Tx mode will stop after first packet sent.
         self.clear_Irq_Status()
         if self._debug:
             print('Setting Tx')
         self._send_command(bytes([_RADIO_SET_TX, pBase, pBaseCount[0], pBaseCount[1]]))
-        return self.status
 
     def set_Rx(self,pBase=0x03,pBaseCount=[0x00,0x00]):
         # pBaseCount = 16 bit parameter of how many steps to time-out
@@ -256,25 +265,119 @@ class SX1280:
         # Time-out duration = pBase * periodBaseCount
         if self._debug:
             print('Setting Rx')
+        self.clear_Irq_Status()
         self._send_command(bytes([_RADIO_SET_RX, pBase]+pBaseCount))
+
+    def set_Ranging_Params(self,range_addr=[0x01,0x02,0x03,0x04], master=False, slave=False):
+        self.set_Regulator_Mode()
+        self.set_Packet_Type('RANGING') # default LoRa
+        self.set_Standby('STDBY_RC')
+        self.set_Modulation_Params(modParam1=0x70,modParam2=0x0A,modParam3=0x03) #SF7/BW1600/CR4/7
+        self.set_Packet_Params(pktParam1=0x08,pktParam2=0x00,pktParam3=0x05,pktParam4=0x20,pktParam5=0x40)
+        self.set_RF_Freq([0xB8,0x9D,0x80])
+        self.set_Buffer_Base_Address(txBaseAddress=0x00,rxBaseAddress=0x00)
+        self.set_Tx_Param() # DEFAULT:power=13dBm,rampTime=20us
+        if slave:
+            self._rangingRole = 0x00
+            # Slave Ranging address
+            self._writeRegister(0x9,0x19,range_addr[0])
+            self._writeRegister(0x9,0x18,range_addr[1])
+            self._writeRegister(0x9,0x17,range_addr[2])
+            self._writeRegister(0x9,0x16,range_addr[3])
+        elif master:
+            self._rangingRole = 0x01
+            # Master Ranging address
+            self._writeRegister(0x9,0x15,range_addr[0])
+            self._writeRegister(0x9,0x14,range_addr[1])
+            self._writeRegister(0x9,0x13,range_addr[2])
+            self._writeRegister(0x9,0x12,range_addr[3])
+        else:
+            print('Select Master or Slave Only')
+            return False
+        # Ranging address length
+        self._writeRegister(0x9,0x31,0x3)        
+        # Ranging Calibration-SF7/BW1600=13528=0x34D8 per Section 3.3 of SemTech AN1200.29
+        self._writeRegister(0x9,0x2D,0x04)
+        self._writeRegister(0x9,0x2C,0x28)
+        # Set Ranging Role
+        self._send_command(bytes([_RADIO_SET_RANGING_ROLE, self._rangingRole]))
+        if slave:
+            # Header Valid -> DIO1, Slave Response Done -> DIO2, Slave Request Discard -> DIO3
+            self.set_Dio_IRQ_Params(irqMask=[0x01,0x90],dio1Mask=[0x00,0x10],dio2Mask=[0x00,0x80],dio3Mask=[0x00,0x01]) 
+        elif master:
+            # Header Valid -> DIO1, Master Result Valid -> DIO2, Master Timeout -> DIO3
+            self.set_Dio_IRQ_Params(irqMask=[0x0E,0x10],dio1Mask=[0x00,0x10],dio2Mask=[0x02,0x00],dio3Mask=[0x04,0x00])
+
+        self._set_ranging = True
+
+    def range(self):
+        if not self._set_ranging:
+            print('Configure ranging parameters first')
+            return False 
+        if self._rangingRole == 0x00: # slave
+            self.set_Rx(pBase=0x02,pBaseCount=[0xFF,0xFF])
+        elif self._rangingRole == 0x01: #master
+            self.set_Tx(pBase=0x02,pBaseCount=[0x00,0x00])
+        self._ranging=True
+        self._busywait()
+        return True
+
+    def read_range(self,raw=False):
+        self._busywait()
+        if not self._ranging:
+            print('Start ranging before attempting to read')
+            return
+        self.set_Standby('STDBY_XOSC')
+        #enable LoRa modem clock
+        _temp=self._readRegister(0x9,0x7F) | (1 << 1)
+        self._writeRegister(0x9,0x7F,_temp)
+        # Set the ranging type for filtered or raw
+        _conf=self._readRegister(0x9,0x24)
+        if raw:
+            _conf = (_conf & 0xCF) | 0x0
+        else:
+            _conf = (_conf & 0xCF) | 0x10
+        self._writeRegister(0x9,0x24,_conf)
+        # Read the 24-bit value (and convert to twos-complement)
+        _val = 0 | (self._readRegister(0x9,0x61)<< 16)
+        _val |= (self._readRegister(0x9,0x62)<< 8)
+        _val |= (self._readRegister(0x9,0x62))
+        
+        if raw:
+            _valLSB = _val
+            # Handle twos-complement stuff
+            if (((1 << 23) & _valLSB) != 0):
+                _valLSB = (((~_valLSB) & ((1 << 24) - 1)) + 1) / (1625.0e3) * 36621.09
+            else:
+                _valLSB = _valLSB / (1625.0e3) * 36621.09
+        else:
+            # Filtered Value
+            _valLSB = _val*20.0 / 100.0
+        self.set_Standby('STDBY_RC')
+        return _valLSB
 
     def get_Packet_Status(self):
         #Table 11-63
+        self._packet_status = []
         with self._device as device:
             device.write(bytes([_RADIO_GET_PACKETSTATUS]), end=1)
             device.readinto(self._BUFFER, end=6)
-        self.rssiSync = (int(self._BUFFER[4])/2)
-        self.snr = (int(self._BUFFER[5])/4)
+        [print(hex(i)+' ',end='') for i in self._BUFFER[:6]]
+        self.rssiSync = (int(self._BUFFER[1])/2)
+        self.snr = (int(self._BUFFER[2])/4)
         return (self.rssiSync,self.snr)
 
     def get_Rx_Buffer_Status(self):
         with self._device as device:
             device.write(bytes([_RADIO_GET_RXBUFFERSTATUS]), end=1)
             device.readinto(self._BUFFER, end=3)
-        return self._BUFFER[1:3]
-        
+        return self._BUFFER[:2]
 
-
+    @property
+    def get_RSSI(self):
+        self._rssi = self._send_command(bytes([_RADIO_GET_RSSIINST, 0x00,0x00]))[2]
+        return self._rssi
+    
 
     @property
     def status(self):

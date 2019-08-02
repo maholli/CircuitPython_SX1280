@@ -35,10 +35,10 @@ radio.set_Buffer_Base_Address(txBaseAddress=0x00,rxBaseAddress=0x00)
 # Prepare radio for Tx
 radio.set_Tx_Param() # DEFAULT:power=13dBm,rampTime=20us
 radio.set_Dio_IRQ_Params(irqMask=[0x40,0x23],dio1Mask=[0x00,0x01],dio2Mask=[0x00,0x02],dio3Mask=[0x40,0x20]) # DEFAULT:TxDone IRQ on DIO1, RxDone IRQ on DIO2, HeaderError and RxTxTimeout IRQ on DIO3
-radio.set_Dio_IRQ_Params() # DEFAULT:TxDone IRQ on DIO1, RxDone IRQ on DIO2, HeaderError and RxTxTimeout IRQ on DIO3
-radio.write_Buffer('ping')
+
 
 # Transmit
 while True:
+    radio.write_Buffer('ping')
     radio.set_Tx(pBase=0x02,pBaseCount=[0x00,0x00])
     time.sleep(2)

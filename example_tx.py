@@ -21,16 +21,10 @@ DIO3.direction = digitalio.Direction.INPUT
 
 spi = busio.SPI(board.SCK, MOSI=board.MOSI, MISO=board.MISO)
 
-radio = sx1280.SX1280(spi, CS, RESET, BUSY, debug=True)
-
-# Prepare radio for Tx
-radio.set_Dio_IRQ_Params(irqMask=[0x40,0x23],dio1Mask=[0x00,0x01],dio2Mask=[0x00,0x02],dio3Mask=[0x40,0x20]) # DEFAULT:TxDone IRQ on DIO1, RxDone IRQ on DIO2, HeaderError and RxTxTimeout IRQ on DIO3
+radio = sx1280.SX1280(spi, CS, RESET, BUSY, debug=False)
 
 cnt=0
 while True:
     cnt+=1
-    radio.write_Buffer('ping'+str(cnt))
-    txstatus = radio.set_Tx()
+    radio.send('ping'+str(cnt))
     time.sleep(1)
-    buf = radio.get_Irq_Status()
-    [print(hex(i)) for i in buf]

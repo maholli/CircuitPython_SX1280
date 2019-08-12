@@ -21,17 +21,13 @@ DIO3.direction = digitalio.Direction.INPUT
 
 spi = busio.SPI(board.SCK, MOSI=board.MOSI, MISO=board.MISO)
 
-radio = sx1280.SX1280(spi, CS, RESET, BUSY, debug=True)
+radio = sx1280.SX1280(spi, CS, RESET, BUSY, debug=False)
 
 # Prepare radio for Rx
-radio.set_Dio_IRQ_Params(irqMask=[0x40,0x23],dio1Mask=[0x00,0x01],dio2Mask=[0x00,0x02],dio3Mask=[0x40,0x20]) # DEFAULT:TxDone IRQ on DIO1, RxDone IRQ on DIO2, HeaderError and RxTxTimeout IRQ on DIO3
-radio.set_Rx()
+radio.listen = True
 
 while True:
-    buf_status = radio.get_Rx_Buffer_Status()
-    if buf_status[2] > 0:
-        radio.get_Packet_Status()
-        buf = radio.read_Buffer(offset=0,payloadLen=255)
-        print(buf)
-        print('')
-        time.sleep(0.5)
+    msg = radio.receive()
+    if msg != None:
+        print(msg, radio.packet_status)
+        time.sleep(1)

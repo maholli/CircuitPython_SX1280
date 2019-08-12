@@ -101,7 +101,7 @@ class SX1280:
         self.set_Buffer_Base_Address()
         self.set_Tx_Param() # power=13dBm,rampTime=20us
         print('Radio Initialized')
-        print(self.status)
+        # print(self.status)
     
     def _convert_status(self,status):
         mode = (status >> 5)
@@ -377,29 +377,68 @@ class SX1280:
         return _valLSB
 
     def get_Packet_Status(self):
-        #Table 11-63
+        # See Table 11-63
         self._packet_status = []
-        with self._device as device:
-            device.write(bytes([_RADIO_GET_PACKETSTATUS]), end=1)
-            device.readinto(self._BUFFER, end=6)
-        [print(hex(i)+' ',end='') for i in self._BUFFER[:6]]
-        self.rssiSync = (int(self._BUFFER[1])/2)
-        self.snr = (int(self._BUFFER[2])/4)
-        return (self.rssiSync,self.snr)
+        p_stat = self._send_command(bytes([_RADIO_GET_PACKETSTATUS,0x00,0x00,0x00,0x00,0x00,0x00]))
+        # [print(hex(i)+' ',end='') for i in self._BUFFER[:6]]
+        self.rssiSync = (-1*int(p_stat[2])/2)
+        self.snr = (int(p_stat[3])/4)
+        
 
     def get_Rx_Buffer_Status(self):
-        # with self._device as device:
-        #     device.write(bytes([_RADIO_GET_RXBUFFERSTATUS]), end=1)
-        #     device.readinto(self._BUFFER, end=3)
         self._send_command(bytes([_RADIO_GET_RXBUFFERSTATUS,0x00,0x00,0x00]))
         return self._BUFFER[:4]
 
+    def send(self, data):
+        """Send a string of data using the transmitter.
+           You can only send 252 bytes at a time
+           (limited by chip's FIFO size and appended headers).
+        """
+        data_len = len(data)
+        assert 0 < data_len <= 252
+        self.set_Standby('STDBY_RC')
+        # Configure Packet Length
+        self.set_Packet_Params(pktParam3=data_len)
+        self.write_Buffer(data)
+        self.set_Tx()
+    @property
+    def packet_status(self):
+        self.get_Packet_Status()
+        return (self.rssiSync,self.snr)
 
     @property
-    def get_RSSI(self):
-        self._rssi = self._send_command(bytes([_RADIO_GET_RSSIINST, 0x00,0x00]))[2]
-        return self._rssi
+    def listen(self):
+        return self._listen
     
+    @listen.setter
+    def listen(self, enable):
+        if enable:
+            self.set_Dio_IRQ_Params(irqMask=[0x40,0x23],dio1Mask=[0x00,0x01],dio2Mask=[0x00,0x02],dio3Mask=[0x40,0x20]) # DEFAULT:TxDone IRQ on DIO1, RxDone IRQ on DIO2, HeaderError and RxTxTimeout IRQ on DIO3
+            self.set_Rx()
+            self._listen = True
+        else:
+            self.set_Standby('STDBY_RC')
+            self._listen = False
+
+    def receive(self, continuous=True):
+        if continuous:
+            self._buf_status = self.get_Rx_Buffer_Status()
+            self._packet_len = self._buf_status[2]
+            self._packet_pointer = self._buf_status[3]
+            if self._packet_len > 0:
+                if self._debug:
+                    print('Offset:',self._packet_pointer,'Length:',self._packet_len)
+                packet = self.read_Buffer(offset=self._packet_pointer,payloadLen=self._packet_len+1)
+                return packet[1:]
+            
+    @property
+    def packet_info(self):
+        return (self._packet_len,self._packet_pointer)
+
+    @property
+    def RSSI(self):
+        self._rssi = self._send_command(bytes([_RADIO_GET_RSSIINST, 0x00,0x00]))
+        return self._rssi  
 
     @property
     def status(self):

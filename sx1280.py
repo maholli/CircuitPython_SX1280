@@ -92,6 +92,15 @@ class SX1280:
         self._busywait()
 
         self.clear_Irq_Status()
+        self.set_Regulator_Mode()
+        self.set_Packet_Type() # default LoRa
+        self.set_Standby('STDBY_RC')
+        self.set_Modulation_Params()
+        self.set_Packet_Params(pktParam3=0x05)
+        self.set_RF_Freq() # 2.4GHz
+        self.set_Buffer_Base_Address()
+        self.set_Tx_Param() # power=13dBm,rampTime=20us
+        print('Radio Initialized')
         print(self.status)
     
     def _convert_status(self,status):
@@ -261,17 +270,19 @@ class SX1280:
         self._send_command(bytes([_RADIO_CLR_IRQSTATUS, 0xFF, 0xFF])) # clear IRQ status
         return _stat
 
-    def set_Tx(self,pBase=0x00,pBaseCount=[0x00,0x00]):
+    def set_Tx(self,pBase=0x02,pBaseCount=[0x00,0x00]):
         #Activate transmit mode with no timeout. Tx mode will stop after first packet sent.
         if self._debug:
             print('Setting Tx')
         self.clear_Irq_Status()
         self._send_command(bytes([_RADIO_SET_TX, pBase, pBaseCount[0], pBaseCount[1]]))
 
-    def set_Rx(self,pBase=0x03,pBaseCount=[0x00,0x00]):
-        # pBaseCount = 16 bit parameter of how many steps to time-out
-        # see Table 11-22 for pBase values
-        # Time-out duration = pBase * periodBaseCount
+    def set_Rx(self,pBase=0x02,pBaseCount=[0xFF,0xFF]):
+        '''
+        pBaseCount = 16 bit parameter of how many steps to time-out
+        see Table 11-22 for pBase values (0xFFFF=continuous)
+        Time-out duration = pBase * periodBaseCount
+        '''
         if self._debug:
             print('Setting Rx')
         self.clear_Irq_Status()

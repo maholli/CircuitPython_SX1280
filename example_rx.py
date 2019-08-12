@@ -1,5 +1,5 @@
 '''
-Working TX example for SX1280 breakout using SAM32
+Working RX example for SX1280 breakout using SAM32
 '''
 
 import board,time
@@ -23,14 +23,15 @@ spi = busio.SPI(board.SCK, MOSI=board.MOSI, MISO=board.MISO)
 
 radio = sx1280.SX1280(spi, CS, RESET, BUSY, debug=True)
 
-# Prepare radio for Tx
+# Prepare radio for Rx
 radio.set_Dio_IRQ_Params(irqMask=[0x40,0x23],dio1Mask=[0x00,0x01],dio2Mask=[0x00,0x02],dio3Mask=[0x40,0x20]) # DEFAULT:TxDone IRQ on DIO1, RxDone IRQ on DIO2, HeaderError and RxTxTimeout IRQ on DIO3
+radio.set_Rx()
 
-cnt=0
 while True:
-    cnt+=1
-    radio.write_Buffer('ping'+str(cnt))
-    txstatus = radio.set_Tx()
-    time.sleep(1)
-    buf = radio.get_Irq_Status()
-    [print(hex(i)) for i in buf]
+    buf_status = radio.get_Rx_Buffer_Status()
+    if buf_status[2] > 0:
+        radio.get_Packet_Status()
+        buf = radio.read_Buffer(offset=0,payloadLen=255)
+        print(buf)
+        print('')
+        time.sleep(0.5)

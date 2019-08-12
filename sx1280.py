@@ -67,16 +67,17 @@ class SX1280:
                   5:'Rx',
                   6:'Tx'}
     _status_cmd={0:'N/A',
-                 1:'Successful',
+                 1:'Cmd Successful',
                  2:'Data Available',
                  3:'Timed-out',
                  4:'Error',
-                 5:'Failure to Execute',
+                 5:'Failure to Execute Cmd',
                  6:'Tx Done'}
     
     _BUFFER = bytearray(10)
     def __init__(self, spi, cs, reset, busy, *, preamble_length=8, baudrate=1500000, debug=False):
-        self._device = spidev.SPIDevice(spi, cs, baudrate=baudrate, polarity=0, phase=0)
+        # self._device = spidev.SPIDevice(spi, cs, baudrate=baudrate, polarity=0, phase=0)
+        self._device = spidev.SPIDevice(spi, cs, polarity=0, phase=0)
         self._reset = reset
         self._reset.switch_to_input(pull=digitalio.Pull.UP)
         self._busy = busy
@@ -85,17 +86,25 @@ class SX1280:
         self._debug = debug
         self._set_ranging = False
         self._ranging=False
+        self._status = 0
 
         self.reset()
         self._busywait()
 
         self.clear_Irq_Status()
         print(self.status)
+    
+    def _convert_status(self,status):
+        mode = (status >> 5)
+        busy = 1 & status
 
     def _send_command(self,command):
         _size=len(command)
         with self._device as device:
             device.write_readinto(command,self._BUFFER,out_end=_size,in_end=_size)
+        if self._debug:
+            self._status = self._BUFFER[0]
+            print('Status:',hex(self._status))
         return self._BUFFER[:_size]
 
     def _writeRegister(self,address1,address2,data):
@@ -254,9 +263,9 @@ class SX1280:
 
     def set_Tx(self,pBase=0x00,pBaseCount=[0x00,0x00]):
         #Activate transmit mode with no timeout. Tx mode will stop after first packet sent.
-        self.clear_Irq_Status()
         if self._debug:
             print('Setting Tx')
+        self.clear_Irq_Status()
         self._send_command(bytes([_RADIO_SET_TX, pBase, pBaseCount[0], pBaseCount[1]]))
 
     def set_Rx(self,pBase=0x03,pBaseCount=[0x00,0x00]):
@@ -368,10 +377,12 @@ class SX1280:
         return (self.rssiSync,self.snr)
 
     def get_Rx_Buffer_Status(self):
-        with self._device as device:
-            device.write(bytes([_RADIO_GET_RXBUFFERSTATUS]), end=1)
-            device.readinto(self._BUFFER, end=3)
-        return self._BUFFER[:2]
+        # with self._device as device:
+        #     device.write(bytes([_RADIO_GET_RXBUFFERSTATUS]), end=1)
+        #     device.readinto(self._BUFFER, end=3)
+        self._send_command(bytes([_RADIO_GET_RXBUFFERSTATUS,0x00,0x00,0x00]))
+        return self._BUFFER[:4]
+
 
     @property
     def get_RSSI(self):
@@ -384,8 +395,8 @@ class SX1280:
         _status = bin(self._send_command(bytes([_RADIO_GET_STATUS]))[0])
         self._busywait()
         try:
-            print('{0:08b} Mode:{1}, Cmd Status:{2}'.format(int(_status),self._status_mode[int(_status[:3])],self._status_cmd[int(_status[3:6])]))
+            # print('{0:08b} Mode:{1}, Cmd Status:{2}'.format(int(_status),self._status_mode[int(_status[:3])],self._status_cmd[int(_status[3:6])]))
             # return (_status,self._status_mode[int(_status[:4])],self._status_cmd[int(_status[4:7])])
-            return (_status)
+            return _status
         except Exception as e:
             print(e)

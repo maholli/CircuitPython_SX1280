@@ -70,7 +70,7 @@ class SX1280:
                  1:'Cmd Successful',
                  2:'Data Available',
                  3:'Timed-out',
-                 4:'Error',
+                 4:'Cmd Error',
                  5:'Failure to Execute Cmd',
                  6:'Tx Done'}
     
@@ -105,20 +105,31 @@ class SX1280:
     
     def _convert_status(self,status):
         mode = (status >> 5)
+        cmdstat = (status & 0x1C)>>2
         busy = 1 & status
+        try:
+            print('\t',hex(status))
+            print('\tMode:',self._status_mode[mode])
+            print('\tCmd Status:',self._status_cmd[cmdstat])
+        except:
+            pass
+
 
     def _send_command(self,command):
         _size=len(command)
+        self._busywait()
         with self._device as device:
             device.write_readinto(command,self._BUFFER,out_end=_size,in_end=_size)
         if self._debug:
+            [print(hex(i),' ',end='') for i in command]
+            print('')
             self._status = self._BUFFER[0]
-            print('Status:',hex(self._status))
+            self._convert_status(self._status)
         return self._BUFFER[:_size]
 
     def _writeRegister(self,address1,address2,data):
         if self._debug:
-            print('Writing to _writeRegister:',hex(address1),hex(address2))
+            print('Writing to:',hex(address1),hex(address2))
         self._send_command(bytes([_RADIO_WRITE_REGISTER,address1,address2,data]))
 
     def _readRegister(self,address1,address2,_length=1):
@@ -134,7 +145,7 @@ class SX1280:
 
     def _busywait(self):
         if self._debug:
-            print('waiting for busy pin.',end='')
+            print('\t\twaiting for busy pin.')
         while self._busy.value:
             print('.',end='')
             pass
@@ -213,7 +224,10 @@ class SX1280:
             else:
                 print('Invalid Spreading Factor')
 
-    def set_Packet_Params(self,pktParam1=0x08,pktParam2=0x00,pktParam3=0x0F,pktParam4=0x20,pktParam5=0x00,pktParam6=0x00,pktParam7=0x00):
+    def set_Packet_Params(self,pktParam1=0x08, # PreamLen
+                                pktParam2=0x00,pktParam3=0x0F, # HeadType, PayloadLen
+                                pktParam4=0x20,pktParam5=0x00, # CRC, InvertIQ
+                                pktParam6=0x00,pktParam7=0x00): # unused
         '''
         16 preamble symbols (0x0C) -> changed to 0x08
         variable length (0x00)
@@ -241,6 +255,7 @@ class SX1280:
         _offset = self._txBaseAddress
         _len = len(data)
         assert 0 < _len <= 252
+        self._busywait()
         with self._device as device:
             device.write(bytes([_RADIO_WRITE_BUFFER,_offset])+data,end=_len+2)
             # device.write(data,end=_len)
@@ -396,7 +411,6 @@ class SX1280:
         """
         data_len = len(data)
         assert 0 < data_len <= 252
-        self.set_Standby('STDBY_RC')
         # Configure Packet Length
         self.set_Packet_Params(pktParam3=data_len)
         self.write_Buffer(data)
@@ -443,7 +457,6 @@ class SX1280:
     @property
     def status(self):
         _status = bin(self._send_command(bytes([_RADIO_GET_STATUS]))[0])
-        self._busywait()
         try:
             # print('{0:08b} Mode:{1}, Cmd Status:{2}'.format(int(_status),self._status_mode[int(_status[:3])],self._status_cmd[int(_status[3:6])]))
             # return (_status,self._status_mode[int(_status[:4])],self._status_cmd[int(_status[4:7])])

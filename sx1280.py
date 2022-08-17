@@ -60,6 +60,7 @@ _irq2Def=('TxDone','RxDone','SyncWrdValid','SyncWrdErr','HeaderValid','HeaderErr
 #             'BW1600':[0.103, -0.041,-0.101,-0.211,-0.424,-0.87 ]}
 _mode_mask = const(0xE0)
 _cmd_stat_mask = const(0x1C)
+_bigbuffer=bytearray(256)
 
 class SX1280:
     _status=bytearray(1)
@@ -88,10 +89,10 @@ class SX1280:
             'CrcMode'       :_PACKET_CRC_MODE_ON,
             'InvertIQ'      :_PACKET_IQ_NORMAL}
     ranging_params={'SF':0xA0,'BW':0x0A,'CR':0x01}
-
-    def __init__(self, spi, cs, reset, busy, frequency, *, preamble_length=8, baudrate=1500000, debug=False, txen=False, rxen=False):
+    buffview = memoryview(_bigbuffer)
+    def __init__(self, spi, cs, reset, busy, frequency, *, preamble_length=8, baudrate=1500000, debug=False, txen=False, rxen=False, hot_start=False):
         # self._device = spidev.SPIDevice(spi, cs, baudrate=baudrate, polarity=0, phase=0)
-        self._device = spidev.SPIDevice(spi, cs, baudrate=500000, polarity=0, phase=0)
+        self._device = spidev.SPIDevice(spi, cs, baudrate=baudrate, polarity=0, phase=0)
         self._reset = reset
         self._reset.switch_to_input(pull=digitalio.Pull.UP)
         self._busy = busy
@@ -99,13 +100,42 @@ class SX1280:
         self.packet_type = 0 # default
         self._debug = debug
         self.default_dio=False
+        # TODO remove all mention of txen and rxen
         self.txen=txen
         self.rxen=rxen
         self.frequency=frequency
         self.ranging_calibration=False
         self.rng_rssi=0
 
+        self.hot_start=hot_start
+        ## ------ hot-start jump point ------
+        if self.hot_start:
+            '''
+            don't cache radio configs
+            rely on cubesat.cfg if response is requested
 
+            manually grab last message, store in hot_start
+            # TODO [x] update this for SX1280 lib
+            '''
+            self.hot_start=False
+            try:
+                # _irq=self.get_Irq_Status(clear=False,parse=True,debug=True)
+                if (self.get_Irq_Status(clear=False)[1] >> 1) & 1:
+                    packet = None
+                    self.last_rssi = self.rssi(raw=True)
+                    self.listen=False
+                    self._buf_status = self.get_Rx_Buffer_Status()
+                    # print(self._buf_status)
+                    self._packet_len = self._buf_status[2]
+                    self._packet_pointer = self._buf_status[3]
+                    packet = self.read_Buffer(offset=self._packet_pointer,payloadLen=self._packet_len+1)[1:]
+
+                    self.clear_Irq_Status()
+                    self.hot_start=packet
+            except Exception as e:
+                print('SX1280 hot start error: ',end='')
+                print(e)
+        ## -----------------------------------
         self.reset()
         self._busywait()
         self.retry_counter=0
@@ -356,6 +386,13 @@ class SX1280:
         self._rxBaseAddress = rxBaseAddress
         self._send_command(bytes([_RADIO_SET_BUFFERBASEADDRESS, txBaseAddress, rxBaseAddress]))
 
+    # TODO make sx1280 set_params function that takes cubesat.cfg['r2x'] input
+    def set_params(self,p):
+        # p = (SF,BW,CR)
+        # self.spreading_factor = p[1]
+        # self.signal_bandwidth = p[2]
+        self.set_Modulation_Params(modParam1=p[0],modParam2=p[1],modParam2=p[2])
+
     def set_Modulation_Params(self,modParam1=0x70,modParam2=0x26,modParam3=0x01):
         # LoRa: modParam1=SpreadingFactor, modParam2=Bandwidth, modParam3=CodingRate
         # LoRa with SF7, (BW1600=0x0A -> changed to BW400=0x26), CR 4/5
@@ -375,6 +412,8 @@ class SX1280:
                 self._writeRegister(0x09,0x25,0x32)
             else:
                 print('Invalid Spreading Factor')
+        else:
+            print('Packet type is not LORA! Set mod failed.')
 
     def set_Packet_Params(self):
         if self._debug: print(self.pcktparams)
@@ -403,12 +442,11 @@ class SX1280:
             device.write(bytes([_RADIO_WRITE_BUFFER,_offset])+data,end=_len+2)
 
     def read_Buffer(self,offset,payloadLen):
-        _payload = bytearray(payloadLen)
         self._busywait()
         with self._device as device:
             device.write(bytes([_RADIO_READ_BUFFER,offset]), end=2)
-            device.readinto(_payload, end=payloadLen)
-        return _payload
+            device.readinto(self.buffview, end=payloadLen)
+        return self.buffview[:payloadLen]
 
     def dump_buffer(self,dbuffer):
         self._busywait()
@@ -485,7 +523,7 @@ class SX1280:
     def set_Rx(self,pBase=0x02,pBaseCount=[0xFF,0xFF]):
         '''
         pBaseCount = 16 bit parameter of how many steps to time-out
-        see Table 11-22 for pBase values (0xFFFF=continuous)
+        see Table 11-26 for pBase values (0xFFFF=continuous)
         Time-out duration = pBase * periodBaseCount
         '''
         if self._debug: print('\tSetting Rx')
@@ -738,6 +776,7 @@ class SX1280:
         self._busywait()
         return self._convert_status(self._BUFFER[0])
 
+    # TODO make this send() again
     def send_mod(
         self,
         data,
@@ -756,7 +795,13 @@ class SX1280:
             self.txen.value=True
             if debug: print('\t\ttxen:on, rxen:off')
         if header:
-            payload = bytearray(4)
+            data_len+=4
+        # Combine header and data to form payload
+        if data == b'!':
+            payload = bytearray(5)
+        else:
+            payload = self.buffview[:data_len]
+        if header:
             if destination is None:  # use attribute
                 payload[0] = self.destination
             else:  # use kwarg
@@ -774,12 +819,19 @@ class SX1280:
             else:  # use kwarg
                 payload[3] = flags
             if debug: print('HEADER: {}'.format([hex(i) for i in payload]))
-            data = payload + data
-            data_len+=4
+        # data = payload + data
+        try:
+            if isinstance(data,(bytes,bytearray,memoryview)):
+                payload[4:]=data[:]
+            else:
+                payload[4:]=data.encode()
+        except Exception as e:
+            print('payload encoding error:',e)
+            payload = bytearray(payload[:4])+data
         # Configure Packet Length
         self.pcktparams['PayloadLength']=data_len
         self.set_Packet_Params()
-        self.write_Buffer(data)
+        self.write_Buffer(payload)
         self.set_Tx()
         txdone=self.wait_for_irq()
         if keep_listening:
@@ -790,8 +842,9 @@ class SX1280:
                 if debug: print('\t\ttxen:off, rxen:n/a')
         return txdone
 
+    # TODO make this receive() again
     def receive_mod(
-        self, *, keep_listening=True, with_header=False, with_ack=False, timeout=0.5,debug=False):
+        self, *, keep_listening=True, with_header=False, with_ack=False, timeout=0.5,debug=False,view=False):
         timed_out = False
         if not self.default_dio:
             print('must set default DIO!')
@@ -843,6 +896,10 @@ class SX1280:
         # Listen again if necessary and return the result packet.
         if keep_listening:
             self.listen=True
+        if view:
+            return packet
+        elif packet is not None:
+            return bytes(packet)
         return packet
 
     def send_with_ack(self, data):

@@ -135,11 +135,11 @@ class SX1280:
         self._autoFS=False
         self._listen=False
         self._range_listening=False
-        self.frequency_ghz=self.frequency
         self.set_Standby('STDBY_RC')
         self.clear_Irq_Status()
         self.set_Regulator_Mode()
         self.set_Packet_Type() # set to LoRa
+        self.frequency_ghz=self.frequency
         self.set_Modulation_Params()
         self.set_Packet_Params()
         self.set_Buffer_Base_Address()
